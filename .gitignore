@@ -69,5 +69,4 @@ venv.bak/
 # Project specific directories (typically large files not for Git)
 data/
 models/
-outputs/
 *.log
