@@ -1,10 +1,8 @@
 # ☀️ PV Digital Twin — Solar Power Forecasting & Inverter Performance Intelligence
 
-### Weather-Aware Data-Driven Digital Twin for Photovoltaic Power Forecasting and Inverter Abnormal-Performance Detection
+### Data-Driven Photovoltaic Power Forecasting and Inverter Abnormal-Performance Screening
 
 A classical Machine Learning based **Photovoltaic (PV) Digital Twin** that combines solar power forecasting, expected-vs-actual power analysis, inverter-level performance monitoring, residual analysis, and abnormal-performance detection into an interactive Streamlit dashboard.
-
-**Live Demo:** [PV Digital Twin — Streamlit App](https://pv-digital-twin-fefzanku23cmjalelgubiu.streamlit.app/?utm_source=chatgpt.com)
 
 ---
 
@@ -12,7 +10,7 @@ A classical Machine Learning based **Photovoltaic (PV) Digital Twin** that combi
 
 Solar photovoltaic plants generate large amounts of operational data from individual inverters and environmental sensors. Simply predicting solar power is not enough for effective plant monitoring.
 
-This project builds a **data-driven digital twin** of a photovoltaic plant by learning expected AC power behavior from historical generation and environmental data.
+This project builds a **data-driven monitoring prototype** that forecasts expected AC power from timestamp and historical-power features, then compares forecasts with observed generation. Weather data is included in preprocessing and EDA, but is not currently fed into the forecasting models.
 
 The system follows the pipeline:
 
@@ -99,32 +97,29 @@ IRRADIATION
 
 ---
 
-# 🔑 Prediction Target
+# 🔑 Prediction Target and Model Inputs
 
-The primary ML target is:
+The raw power measurement is `AC_POWER`. Feature engineering creates `TARGET_AC_POWER` from the same inverter’s observation exactly 15 minutes after the feature timestamp. Rows without an exact +15-minute observation are excluded from model training and evaluation:
 
 ```text
-AC_POWER
+TARGET_AC_POWER = same inverter AC_POWER at DATE_TIME + 15 minutes
 ```
 
-AC power represents the power delivered on the AC side of the photovoltaic system and is therefore used as the main forecasting target.
+AC power represents power delivered on the AC side of the photovoltaic system. `TARGET_AC_POWER` is the next observed AC power value, while features are read from the current timestamp.
 
 Conceptually:
 
 ```text
-Irradiation
-Ambient Temperature
-Module Temperature
-Time Features
-Historical AC Power
-Historical Power Features
+Time and cyclic features
+Current and lagged AC power
+Rolling AC power features
         ↓
    ML Model
         ↓
 Predicted AC Power
 ```
 
-The project uses AC power as the primary prediction target, while DC power can be used for secondary analysis.
+The weather observations are merged and explored in the analysis, but **the current forecasting models do not use weather columns as predictors**. The trained feature list is time features plus historical/rolling AC power. This distinction matters when describing the current model.
 
 ---
 
@@ -258,7 +253,7 @@ All time-dependent features were created with attention to chronological orderin
 
 # ⏱️ Time-Series Train/Test Strategy
 
-Because solar power is a time-dependent forecasting problem, the data was split chronologically rather than randomly.
+Because solar power is a time-dependent forecasting problem, the data was split chronologically rather than randomly. Rows are excluded from training or validation when their +15-minute target would cross the next split boundary.
 
 Conceptually:
 
@@ -315,8 +310,6 @@ Advantages:
 
 Random Forest was used to capture nonlinear relationships between:
 
-- Irradiation
-- Temperature
 - Historical power
 - Temporal features
 
@@ -328,7 +321,7 @@ It combines multiple decision trees and averages their predictions.
 
 XGBoost was evaluated as a powerful gradient-boosting model for nonlinear regression.
 
-It can capture complex interactions between environmental and historical power features.
+It can capture complex interactions between historical-power and temporal features.
 
 The project keeps XGBoost within the classical ML pipeline and does not rely on deep learning.
 
@@ -372,18 +365,18 @@ The final chronological test-set comparison obtained from the project is:
 
 | Plant | Model | MAE | RMSE | R² |
 |---|---|---:|---:|---:|
-| Plant 1 | Persistence | 60.10 | 113.13 | 0.9113 |
-| Plant 1 | Linear Regression | 85.52 | 131.39 | 0.8804 |
-| Plant 1 | Random Forest | 74.89 | 141.63 | 0.8610 |
-| Plant 1 | XGBoost | 73.69 | 148.88 | 0.8546 |
-| Plant 2 | Persistence | 63.92 | 132.20 | 0.8031 |
-| Plant 2 | Linear Regression | 86.34 | 149.48 | 0.7483 |
-| Plant 2 | Random Forest | 75.35 | 152.38 | 0.7384 |
-| Plant 2 | XGBoost | 75.21 | 152.41 | 0.7383 |
+| Plant 1 | Persistence | 60.15 | 113.23 | 0.9113 |
+| Plant 1 | Linear Regression | 85.73 | 131.52 | 0.8803 |
+| Plant 1 | Random Forest | 74.73 | 141.51 | 0.8614 |
+| Plant 1 | XGBoost | 74.51 | 144.27 | 0.8560 |
+| Plant 2 | Persistence | 64.05 | 132.34 | 0.8029 |
+| Plant 2 | Linear Regression | 86.63 | 149.63 | 0.7480 |
+| Plant 2 | Random Forest | 74.00 | 149.39 | 0.7488 |
+| Plant 2 | XGBoost | 72.09 | 148.23 | 0.7527 |
 
 ### Important observation
 
-The Persistence baseline produced the lowest MAE for both plants in this particular experiment.
+In the latest rerun after enforcing the exact 15-minute target and split-boundary exclusions, Persistence produced the lowest MAE for both plants. None of the tested ML models beat Persistence on MAE in this evaluation.
 
 This is an important result rather than something to hide.
 
@@ -512,36 +505,36 @@ Individual inverter monitoring
 
 # 🔍 Anomaly Detection Results
 
-For Plant 1, the inverter-level anomaly summary contains:
+Thresholds are calibrated on the first 60% of each inverter's chronological test rows and applied to active-power rows in the later 40%. Current screening results are:
+
+Plant 1:
 
 ```text
-Total observations = 10,098
-Inverters           = 22
-Observations/inverter = 459
+Evaluated active observations = 2,022
+Inverters                      = 22
 ```
 
-The displayed inverter-level anomaly counts sum to approximately:
+The inverter-level screening counts sum to:
 
 ```text
-657 anomalous observations
+113 flagged observations
 ```
 
 which corresponds to approximately:
 
 ```text
-6.51% anomaly observations
+5.59% of evaluated active observations
 ```
 
-For Plant 2, the analyzed test data contains:
+Plant 2:
 
 ```text
-Total observations = 10,450
-Anomalies          = 479
-Normal observations = 9,971
-Anomaly percentage ≈ 4.58%
+Evaluated active observations = 1,998
+Anomalies                     = 78
+Anomaly percentage            ≈ 3.90%
 ```
 
-These values represent observations flagged as abnormal by the project's anomaly-detection procedure; they should not be interpreted as confirmed equipment failures.
+These values are screening flag rates, not fault-detection accuracy. Because the dataset has no confirmed fault labels, precision and recall cannot be measured from this project, and a flagged observation does not establish an equipment failure.
 
 ---
 
@@ -655,67 +648,22 @@ The final project follows:
 
 ```text
 PV-Digital-Twin/
-│
-├── data/
-│   ├── raw/
-│   │   ├── Plant_1_Generation_Data.csv
-│   │   ├── Plant_1_Weather_Sensor_Data.csv
-│   │   ├── Plant_2_Generation_Data.csv
-│   │   └── Plant_2_Weather_Sensor_Data.csv
-│   │
-│   ├── processed/
-│   │   ├── plant1_merged.csv
-│   │   ├── plant2_merged.csv
-│   │   ├── plant1_features.csv
-│   │   └── plant2_features.csv
-│   │
-│   └── final/
-│       └── model_ready_data.csv
-│
-├── notebooks/
-│   ├── 01_Data_Inspection.ipynb
-│   ├── 02_Data_Preprocessing.ipynb
-│   ├── 03_EDA.ipynb
-│   ├── 04_Data_Merging_and_Synchronization.ipynb
-│   ├── 05_Feature_Engineering.ipynb
-│   ├── 06_Forecasting_Baseline.ipynb
-│   ├── 07_Model_Training_Comparison.ipynb
-│   ├── 08_Model_Evaluation.ipynb
-│   ├── 09_Digital_Twin.ipynb
-│   ├── 10_Anomaly_Detection.ipynb
-│   ├── 11_Scenario_Simulation.ipynb
-│   └── 12_Final_Analysis.ipynb
-│
-├── models/
-│   ├── persistence/
-│   ├── linear_regression/
-│   ├── random_forest/
-│   └── xgboost/
-│
-├── outputs/
-│   ├── figures/
-│   ├── metrics/
-│   ├── predictions/
-│   └── tables/
-│
-├── src/
-│   ├── preprocessing.py
-│   ├── feature_engineering.py
-│   ├── forecasting.py
-│   ├── anomaly_detection.py
-│   └── simulation.py
-│
-├── app/
-│   ├── app.py
-│   ├── components/
-│   └── assets/
-│
+├── app.py
 ├── requirements.txt
 ├── README.md
-└── .gitignore
+├── data/                         # local raw and processed data (not needed by dashboard)
+├── models/                       # large local trained model artifacts
+├── notebooks/                    # analysis and model workflow (01–10)
+├── src/
+│   └── anomaly_detection.py      # calibrated inverter screening and export pipeline
+└── outputs/                      # dashboard data, included in the repository
+    ├── anomalies/
+    ├── metrics/
+    ├── predictions/
+    └── tables/
 ```
 
-The project structure separates raw data, notebooks, trained models, generated outputs, reusable source code, and the Streamlit application.
+The dashboard reads generated CSV files from `outputs/`, which are included so deployments have the required data. Raw datasets and large serialized models remain local-only and are ignored by Git. Recreate the anomaly outputs from saved test predictions with `python src/anomaly_detection.py`.
 
 ---
 
@@ -838,35 +786,6 @@ Perform inverter-level abnormal-performance analysis using:
 
 ---
 
-## 11 — Scenario Simulation
-
-The project architecture also supports digital-twin what-if scenarios such as:
-
-```text
-Reduced Irradiance
-Temperature Stress
-Inverter Degradation
-Inverter Outage
-```
-
-with the objective of estimating the impact on expected generation and energy loss.
-
----
-
-## 12 — Final Analysis
-
-Collect the final:
-
-- Model metrics
-- Forecast results
-- Anomaly results
-- Scenario results
-- Energy-loss results
-
-into a consolidated project analysis.
-
----
-
 # 🛠️ Technologies Used
 
 ### Programming
@@ -903,14 +822,7 @@ into a consolidated project analysis.
 
 # 📦 Installation
 
-Clone the repository:
-
-```bash
-git clone https://github.com/your-username/PV-Digital-Twin.git
-cd PV-Digital-Twin
-```
-
-Create a virtual environment:
+From the project root, create a virtual environment:
 
 ```bash
 python -m venv venv
@@ -935,24 +847,10 @@ pip install -r requirements.txt
 From the project root:
 
 ```bash
-streamlit run app/app.py
-```
-
-or, if your deployed application uses the root-level application file:
-
-```bash
 streamlit run app.py
 ```
 
 Then open the local Streamlit URL shown in the terminal.
-
----
-
-# 🌐 Live Demo
-
-The deployed application is available here:
-
-[PV Digital Twin — Live Streamlit Dashboard](https://pv-digital-twin-fefzanku23cmjalelgubiu.streamlit.app/?utm_source=chatgpt.com)
 
 ---
 
@@ -962,7 +860,7 @@ The project demonstrates that:
 
 - Solar AC power has strong temporal behavior that can be exploited for short-term forecasting.
 - A Persistence baseline can be surprisingly strong for short-horizon solar forecasting.
-- Classical ML models can model nonlinear relationships between environmental and historical power features.
+- The current classical models use time and historical-power features; weather columns are available for analysis but are not in the trained feature set.
 - Expected-vs-actual comparison provides a useful basis for operational monitoring.
 - Inverter-level analysis provides more granular information than plant-level averages.
 - Residual and normalized-residual analysis can identify observations requiring further investigation.
@@ -1019,7 +917,7 @@ Possible future improvements include:
 - Model retraining pipeline
 - Production monitoring
 
-The project specification originally considers horizons such as 15 minutes, 1 hour, 4 hours, and 24 hours; the current implementation focuses on the initial short-horizon forecasting stage.
+The current implementation focuses on a one-step (15-minute) forecasting horizon. Scenario simulation and multi-horizon forecasting are not implemented.
 
 ---
 
@@ -1124,11 +1022,7 @@ VIT Bhopal University
 
 ## 🔗 Project Links
 
-**Live Application:**  
-[PV Digital Twin Streamlit App](https://pv-digital-twin-fefzanku23cmjalelgubiu.streamlit.app/?utm_source=chatgpt.com)
-
-**GitHub Repository:**  
-Add your final GitHub repository URL here.
+The Streamlit app entry point is `app.py`. For hosted deployment, set the repository's main file to `app.py` and ensure the contents of `outputs/` are committed.
 
 ---
 
