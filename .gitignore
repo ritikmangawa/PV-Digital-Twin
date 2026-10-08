@@ -70,3 +70,11 @@ venv.bak/
 data/
 models/
 *.log
+
+# Keep the compact default forecasting models available to the Streamlit host.
+!models/
+models/*
+!models/xgboost/
+models/xgboost/*
+!models/xgboost/plant1_model.pkl
+!models/xgboost/plant2_model.pkl

@@ -10,7 +10,7 @@ A classical Machine Learning based **Photovoltaic (PV) Digital Twin** that combi
 
 Solar photovoltaic plants generate large amounts of operational data from individual inverters and environmental sensors. Simply predicting solar power is not enough for effective plant monitoring.
 
-This project builds a **data-driven monitoring prototype** that forecasts expected AC power from timestamp and historical-power features, then compares forecasts with observed generation. Weather data is included in preprocessing and EDA, but is not currently fed into the forecasting models.
+This project builds a **data-driven monitoring prototype** that forecasts 15-minute-ahead AC power from timestamp, historical-power, and current-time weather features, then compares forecasts with observed generation. Weather predictors are aligned to each input timestamp; weather observed at the future target time is not used.
 
 The system follows the pipeline:
 
@@ -119,7 +119,7 @@ Rolling AC power features
 Predicted AC Power
 ```
 
-The weather observations are merged and explored in the analysis, but **the current forecasting models do not use weather columns as predictors**. The trained feature list is time features plus historical/rolling AC power. This distinction matters when describing the current model.
+The weather observations are merged and explored, and the forecasting models now use `IRRADIATION`, `AMBIENT_TEMPERATURE`, and `MODULE_TEMPERATURE` measured at the input timestamp. These are combined with time features and historical/rolling inverter AC power. Weather from the future target timestamp is excluded to avoid leakage. Persistence remains the weather-free benchmark.
 
 ---
 
@@ -215,6 +215,18 @@ hour_cos
 ```
 
 This avoids treating hour values such as 23 and 0 as completely distant values.
+
+## Weather Features
+
+The forecasting models use the weather measurement aligned with the current inverter input timestamp:
+
+```text
+IRRADIATION
+AMBIENT_TEMPERATURE
+MODULE_TEMPERATURE
+```
+
+These values are available at forecast time in this historical dataset. The models do not use weather observed 15 minutes later.
 
 ## Historical Power Features
 
@@ -860,11 +872,23 @@ The project demonstrates that:
 
 - Solar AC power has strong temporal behavior that can be exploited for short-term forecasting.
 - A Persistence baseline can be surprisingly strong for short-horizon solar forecasting.
-- The current classical models use time and historical-power features; weather columns are available for analysis but are not in the trained feature set.
+- The trained classical ML models use time, historical-power, and current-time weather features; Persistence remains a weather-free benchmark.
 - Expected-vs-actual comparison provides a useful basis for operational monitoring.
 - Inverter-level analysis provides more granular information than plant-level averages.
 - Residual and normalized-residual analysis can identify observations requiring further investigation.
 - Anomaly detection should be interpreted as abnormal-performance detection when ground-truth fault labels are unavailable.
+
+## Make a Manual Forecast in the Dashboard
+
+The **Make a forecast** page accepts a timestamp, current weather measurements, and the inverter's current and historical power features. It loads the selected plant's saved weather-aware model and predicts AC power 15 minutes after the entered timestamp. The actual power must be checked when that time arrives.
+
+The page requires trained model files under `models/linear_regression`, `models/random_forest`, or `models/xgboost`. Run notebook 07 before launching the app if those files are missing. Start the local dashboard with:
+
+```bash
+streamlit run app.py
+```
+
+This is a manual forecast form; it does not ingest live plant telemetry automatically.
 
 ---
 

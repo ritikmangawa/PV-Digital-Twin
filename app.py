@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -18,6 +19,7 @@ PREDICTIONS = ROOT / "outputs" / "predictions"
 ANOMALIES = ROOT / "outputs" / "anomalies"
 METRICS = ROOT / "outputs" / "metrics"
 INVERTER_METRICS = ROOT / "outputs" / "tables"
+MODELS = ROOT / "models"
 
 st.set_page_config(
     page_title="PV Digital Twin",
@@ -39,6 +41,19 @@ MODEL_COLORS = {
     "Random Forest": "#5687c8",
     "XGBoost": "#a476c4",
 }
+
+FORECAST_MODEL_FILES = {
+    "Linear Regression": "linear_regression",
+    "Random Forest": "random_forest",
+    "XGBoost": "xgboost",
+}
+FORECAST_FEATURES = [
+    "hour", "minute", "day", "day_of_week", "day_of_year", "month",
+    "hour_sin", "hour_cos",
+    "IRRADIATION", "AMBIENT_TEMPERATURE", "MODULE_TEMPERATURE",
+    "AC_POWER_lag_1", "AC_POWER_lag_4", "AC_POWER_lag_8", "AC_POWER_lag_96",
+    "AC_POWER_rolling_mean_4", "AC_POWER_rolling_mean_8",
+]
 
 
 @st.cache_data(show_spinner=False)
@@ -88,6 +103,61 @@ def load_inverter_summary(plant: int) -> pd.DataFrame | None:
 
 def load_metrics(filename: str) -> pd.DataFrame | None:
     return read_csv(str(METRICS / filename))
+
+
+@st.cache_resource(show_spinner="Loading the trained model...")
+def load_forecast_model(plant_number: int, model_name: str):
+    """Load a trained weather-aware model once per app process."""
+    model_folder = FORECAST_MODEL_FILES[model_name]
+    model_path = MODELS / model_folder / f"plant{plant_number}_model.pkl"
+    if not model_path.is_file():
+        raise FileNotFoundError(
+            f"Trained model not found: {model_path.relative_to(ROOT)}. "
+            "Make the trained model artifact available on this app host; "
+            "if needed, rerun notebook 07_Model_Training_Comparison.ipynb."
+        )
+    model = joblib.load(model_path)
+    expected_features = getattr(model, "n_features_in_", len(FORECAST_FEATURES))
+    if expected_features != len(FORECAST_FEATURES):
+        raise ValueError(
+            f"This model expects {expected_features} features, but the app supplies "
+            f"{len(FORECAST_FEATURES)} weather-aware features. Retrain it with notebook 07."
+        )
+    return model
+
+
+def available_forecast_models(plant_number: int) -> list[str]:
+    """Return models whose artifacts are present on this app host."""
+    return [
+        name for name, folder in FORECAST_MODEL_FILES.items()
+        if (MODELS / folder / f"plant{plant_number}_model.pkl").is_file()
+    ]
+
+
+def build_forecast_features(
+    timestamp: pd.Timestamp,
+    irradiation: float,
+    ambient_temperature: float,
+    module_temperature: float,
+    power_history: dict[str, float],
+) -> pd.DataFrame:
+    """Create the same ordered 17 predictors used by the training notebooks."""
+    hour_fraction = timestamp.hour + timestamp.minute / 60
+    values = {
+        "hour": timestamp.hour,
+        "minute": timestamp.minute,
+        "day": timestamp.day,
+        "day_of_week": timestamp.dayofweek,
+        "day_of_year": timestamp.dayofyear,
+        "month": timestamp.month,
+        "hour_sin": np.sin(2 * np.pi * hour_fraction / 24),
+        "hour_cos": np.cos(2 * np.pi * hour_fraction / 24),
+        "IRRADIATION": irradiation,
+        "AMBIENT_TEMPERATURE": ambient_temperature,
+        "MODULE_TEMPERATURE": module_temperature,
+        **power_history,
+    }
+    return pd.DataFrame([[values[name] for name in FORECAST_FEATURES]], columns=FORECAST_FEATURES)
 
 
 def show_load_problem(*files: Path) -> None:
@@ -157,7 +227,7 @@ st.sidebar.title("☀️ PV Digital Twin")
 st.sidebar.caption("Solar generation forecasting and inverter monitoring")
 page = st.sidebar.radio(
     "Explore",
-    ["Overview", "Power prediction", "Inverter performance", "Abnormal-performance screening", "Model comparison"],
+    ["Overview", "Make a forecast", "Power prediction", "Inverter performance", "Abnormal-performance screening", "Model comparison"],
     label_visibility="collapsed",
 )
 plant = st.sidebar.selectbox("Plant", [1, 2], format_func=lambda p: f"Plant {p}")
@@ -167,7 +237,10 @@ report = load_anomaly_report(plant)
 scores = load_anomaly_scores(plant)
 
 st.title(page)
-st.caption(f"Plant {plant} · historical test-period results")
+if page == "Make a forecast":
+    st.caption(f"Plant {plant} · manual weather-aware forecast")
+else:
+    st.caption(f"Plant {plant} · historical test-period results")
 
 if pred is not None and "_load_error" in pred:
     st.error("Could not read prediction data: " + pred["_load_error"].iloc[0])
@@ -177,7 +250,128 @@ if pred is not None and "_load_error" in pred:
 # -----------------------------------------------------------------------------
 # Overview
 # -----------------------------------------------------------------------------
-if page == "Overview":
+if page == "Make a forecast":
+    st.write(
+        "Enter measurements available now for one inverter. The selected model "
+        "will forecast its AC power 15 minutes after the timestamp."
+    )
+    st.info(
+        "This form makes a forecast from manually entered values. It does not "
+        "connect to live plant sensors. Use the same measurement units as the project data."
+    )
+    # XGBoost is a compact artifact and performed competitively on both plants.
+    available_models = available_forecast_models(plant)
+    if not available_models:
+        st.error(
+            f"No trained model artifacts are available for Plant {plant}. "
+            "Add a trained artifact under the models folder and redeploy."
+        )
+        st.stop()
+    default_model = "XGBoost" if "XGBoost" in available_models else available_models[0]
+    model_name = st.selectbox(
+        "Forecast model",
+        available_models,
+        index=available_models.index(default_model),
+        help="Choose one of the weather-aware models trained in notebook 07.",
+    )
+
+    with st.form("manual_forecast_form"):
+        st.subheader("Forecast timestamp and current weather")
+        timestamp = st.datetime_input(
+            "Timestamp of the current inverter reading",
+            value=pd.Timestamp.now().floor("15min").to_pydatetime(),
+            help="The forecast is for exactly 15 minutes after this timestamp.",
+        )
+        weather_cols = st.columns(3)
+        irradiation = weather_cols[0].number_input(
+            "Irradiation at this time", min_value=0.0, max_value=2.0,
+            value=0.2, step=0.01, format="%.3f",
+            help="Use the same irradiation scale as the plant weather CSV.",
+        )
+        ambient_temperature = weather_cols[1].number_input(
+            "Ambient temperature", min_value=-50.0, max_value=80.0,
+            value=25.0, step=0.5,
+            help="Use the same temperature unit as the plant weather CSV.",
+        )
+        module_temperature = weather_cols[2].number_input(
+            "Module temperature", min_value=-50.0, max_value=100.0,
+            value=30.0, step=0.5,
+            help="Use the same temperature unit as the plant weather CSV.",
+        )
+
+        st.subheader("Current and historical inverter power")
+        st.caption(
+            "Enter AC power in the same units as the training data. Lag inputs "
+            "refer to earlier rows for this inverter; with missing timestamps, "
+            "a row may be more than 15 minutes apart. Rolling means summarize "
+            "the previous 4 or 8 rows."
+        )
+        power_cols = st.columns(4)
+        current_power = power_cols[0].number_input(
+            "Current AC power", min_value=0.0, value=0.0, step=10.0,
+        )
+        lag_1 = power_cols[1].number_input(
+            "Power: previous row", min_value=0.0, value=0.0, step=10.0,
+        )
+        lag_4 = power_cols[2].number_input(
+            "Power: 4 rows back", min_value=0.0, value=0.0, step=10.0,
+        )
+        lag_8 = power_cols[3].number_input(
+            "Power: 8 rows back", min_value=0.0, value=0.0, step=10.0,
+        )
+        history_cols = st.columns(3)
+        lag_96 = history_cols[0].number_input(
+            "Power: 96 rows back", min_value=0.0, value=0.0, step=10.0,
+        )
+        rolling_4 = history_cols[1].number_input(
+            "Mean power: previous 4 rows", min_value=0.0, value=0.0, step=10.0,
+        )
+        rolling_8 = history_cols[2].number_input(
+            "Mean power: previous 8 rows", min_value=0.0, value=0.0, step=10.0,
+        )
+        submitted = st.form_submit_button("Forecast 15 minutes ahead", type="primary")
+
+    if submitted:
+        if timestamp.minute % 15 != 0 or timestamp.second != 0:
+            st.error("Choose a timestamp on a 15-minute boundary (for example, 10:00 or 10:15).")
+        else:
+            history = {
+                "AC_POWER_lag_1": lag_1,
+                "AC_POWER_lag_4": lag_4,
+                "AC_POWER_lag_8": lag_8,
+                "AC_POWER_lag_96": lag_96,
+                "AC_POWER_rolling_mean_4": rolling_4,
+                "AC_POWER_rolling_mean_8": rolling_8,
+            }
+            model_input = build_forecast_features(
+                pd.Timestamp(timestamp), irradiation, ambient_temperature,
+                module_temperature, history,
+            )
+            try:
+                trained_model = load_forecast_model(plant, model_name)
+                forecast = float(trained_model.predict(model_input)[0])
+            except Exception as exc:
+                st.error(f"Could not load or run the trained model: {exc}")
+            else:
+                forecast_time = pd.Timestamp(timestamp) + pd.Timedelta(minutes=15)
+                result_cols = st.columns(2)
+                result_cols[0].metric(
+                    f"{model_name} forecast at {forecast_time:%Y-%m-%d %H:%M}",
+                    format_number(forecast),
+                )
+                result_cols[1].metric(
+                    "Persistence reference",
+                    format_number(current_power),
+                    help="Persistence carries current AC power forward as its 15-minute forecast.",
+                )
+                st.caption(
+                    "The forecast is an estimate. Compare it with the inverter's "
+                    "actual reading once the forecast time arrives."
+                )
+                with st.expander("Inspect the exact model inputs"):
+                    st.dataframe(model_input, hide_index=True, width="stretch")
+
+elif page == "Overview":
     show_load_problem(
         PREDICTIONS / f"plant{plant}_test_predictions.csv",
         ANOMALIES / f"plant{plant}_inverter_anomaly_summary.csv",
